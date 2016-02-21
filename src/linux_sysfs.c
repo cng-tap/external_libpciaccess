@@ -1,7 +1,6 @@
 /*
  * (C) Copyright IBM Corporation 2006
  * All Rights Reserved.
- * Copyright 2012 Red Hat, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,10 +33,6 @@
 
 #define _GNU_SOURCE
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -45,22 +40,12 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <sys/mman.h>
 #include <dirent.h>
 #include <errno.h>
-#include <limits.h>
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__arm__)
-#include <sys/io.h>
-#else
-#define inb(x) -1
-#define inw(x) -1
-#define inl(x) -1
-#define outb(x,y) do {} while (0)
-#define outw(x,y) do {} while (0)
-#define outl(x,y) do {} while (0)
-#define iopl(x) -1
+#ifndef ANDROID
+#include "config.h"
 #endif
 
 #ifdef HAVE_MTRR
@@ -102,7 +87,7 @@ pci_system_linux_sysfs_create( void )
 	if ( pci_sys != NULL ) {
 	    pci_sys->methods = & linux_sysfs_methods;
 #ifdef HAVE_MTRR
-	    pci_sys->mtrr_fd = open("/proc/mtrr", O_WRONLY | O_CLOEXEC);
+	    pci_sys->mtrr_fd = open("/proc/mtrr", O_WRONLY);
 #endif
 	    err = populate_entries(pci_sys);
 	}
@@ -249,7 +234,7 @@ pci_device_linux_sysfs_probe( struct pci_device * dev )
 		  dev->bus,
 		  dev->dev,
 		  dev->func );
-	fd = open( name, O_RDONLY | O_CLOEXEC);
+	fd = open( name, O_RDONLY );
 	if ( fd != -1 ) {
 	    char * next;
 	    pciaddr_t  low_addr;
@@ -311,7 +296,7 @@ pci_device_linux_sysfs_read_rom( struct pci_device * dev, void * buffer )
 	      dev->dev,
 	      dev->func );
 
-    fd = open( name, O_RDWR | O_CLOEXEC);
+    fd = open( name, O_RDWR );
     if ( fd == -1 ) {
 #ifdef LINUX_ROM
 	/* If reading the ROM using sysfs fails, fall back to the old
@@ -392,7 +377,7 @@ pci_device_linux_sysfs_read( struct pci_device * dev, void * data,
 	      dev->dev,
 	      dev->func );
 
-    fd = open( name, O_RDONLY | O_CLOEXEC);
+    fd = open( name, O_RDONLY );
     if ( fd == -1 ) {
 	return errno;
     }
@@ -452,7 +437,7 @@ pci_device_linux_sysfs_write( struct pci_device * dev, const void * data,
 	      dev->dev,
 	      dev->func );
 
-    fd = open( name, O_WRONLY | O_CLOEXEC);
+    fd = open( name, O_WRONLY );
     if ( fd == -1 ) {
 	return errno;
     }
@@ -503,7 +488,7 @@ pci_device_linux_sysfs_map_range_wc(struct pci_device *dev,
 	     dev->dev,
 	     dev->func,
 	     map->region);
-    fd = open(name, open_flags | O_CLOEXEC);
+    fd = open(name, open_flags);
     if (fd == -1)
 	    return errno;
 
@@ -568,7 +553,7 @@ pci_device_linux_sysfs_map_range(struct pci_device *dev,
              dev->func,
              map->region);
 
-    fd = open(name, open_flags | O_CLOEXEC);
+    fd = open(name, open_flags);
     if (fd == -1) {
         return errno;
     }
@@ -691,7 +676,7 @@ static void pci_device_linux_sysfs_enable(struct pci_device *dev)
 	      dev->dev,
 	      dev->func );
 
-    fd = open( name, O_RDWR | O_CLOEXEC);
+    fd = open( name, O_RDWR );
     if (fd == -1)
        return;
 
@@ -713,7 +698,7 @@ static int pci_device_linux_sysfs_boot_vga(struct pci_device *dev)
 	      dev->dev,
 	      dev->func );
 
-    fd = open( name, O_RDONLY | O_CLOEXEC);
+    fd = open( name, O_RDONLY );
     if (fd == -1)
        return 0;
 
@@ -756,14 +741,13 @@ pci_device_linux_sysfs_open_device_io(struct pci_io_handle *ret,
     snprintf(name, PATH_MAX, "%s/%04x:%02x:%02x.%1u/resource%d",
 	     SYS_BUS_PCI, dev->domain, dev->bus, dev->dev, dev->func, bar);
 
-    ret->fd = open(name, O_RDWR | O_CLOEXEC);
+    ret->fd = open(name, O_RDWR);
 
     if (ret->fd < 0)
 	return NULL;
 
     ret->base = base;
     ret->size = size;
-    ret->is_legacy = 0;
 
     return ret;
 }
@@ -780,28 +764,22 @@ pci_device_linux_sysfs_open_legacy_io(struct pci_io_handle *ret,
 	snprintf(name, PATH_MAX, "/sys/class/pci_bus/%04x:%02x/legacy_io",
 		 dev->domain, dev->bus);
 
-	ret->fd = open(name, O_RDWR | O_CLOEXEC);
+	ret->fd = open(name, O_RDWR);
 	if (ret->fd >= 0)
 	    break;
 
 	dev = pci_device_get_parent_bridge(dev);
     }
 
-    /*
-     * You would think you'd want to use /dev/port here.  Don't make that
-     * mistake, /dev/port only does byte-wide i/o cycles which means it
-     * doesn't work.  If you think this is stupid, well, you're right.
-     */
+    /* If not, /dev/port is the best we can do */
+    if (!dev)
+	ret->fd = open("/dev/port", O_RDWR);
 
-    /* If we've no other choice, iopl */
-    if (ret->fd < 0) {
-	if (iopl(3))
-	    return NULL;
-    }
+    if (ret->fd < 0)
+	return NULL;
 
     ret->base = base;
     ret->size = size;
-    ret->is_legacy = 1;
 
     return ret;
 }
@@ -810,8 +788,7 @@ static void
 pci_device_linux_sysfs_close_io(struct pci_device *dev,
 				struct pci_io_handle *handle)
 {
-    if (handle->fd > -1)
-	close(handle->fd);
+    close(handle->fd);
 }
 
 static uint32_t
@@ -819,15 +796,8 @@ pci_device_linux_sysfs_read32(struct pci_io_handle *handle, uint32_t port)
 {
     uint32_t ret;
 
-    if (handle->fd > -1) {
-	if (handle->is_legacy)
-	    pread(handle->fd, &ret, 4, port + handle->base);
-	else
-	    pread(handle->fd, &ret, 4, port);
-    } else {
-	ret = inl(port + handle->base);
-    }
-	
+    pread(handle->fd, &ret, 4, port + handle->base);
+
     return ret;
 }
 
@@ -836,14 +806,7 @@ pci_device_linux_sysfs_read16(struct pci_io_handle *handle, uint32_t port)
 {
     uint16_t ret;
 
-    if (handle->fd > -1) {
-	if (handle->is_legacy)
-	    pread(handle->fd, &ret, 2, port + handle->base);
-	else
-	    pread(handle->fd, &ret, 2, port);
-    } else {
-	ret = inw(port + handle->base);
-    }
+    pread(handle->fd, &ret, 2, port + handle->base);
 
     return ret;
 }
@@ -853,14 +816,7 @@ pci_device_linux_sysfs_read8(struct pci_io_handle *handle, uint32_t port)
 {
     uint8_t ret;
 
-    if (handle->fd > -1) {
-	if (handle->is_legacy)
-	    pread(handle->fd, &ret, 1, port + handle->base);
-	else
-	    pread(handle->fd, &ret, 1, port);
-    } else {
-	ret = inb(port + handle->base);
-    }
+    pread(handle->fd, &ret, 1, port + handle->base);
 
     return ret;
 }
@@ -869,42 +825,21 @@ static void
 pci_device_linux_sysfs_write32(struct pci_io_handle *handle, uint32_t port,
 			       uint32_t data)
 {
-    if (handle->fd > -1) {
-	if (handle->is_legacy)
-	    pwrite(handle->fd, &data, 4, port + handle->base);
-	else
-	    pwrite(handle->fd, &data, 4, port);
-    } else {
-	outl(data, port + handle->base);
-    }
+    pwrite(handle->fd, &data, 4, port + handle->base);
 }
 
 static void
 pci_device_linux_sysfs_write16(struct pci_io_handle *handle, uint32_t port,
 			       uint16_t data)
 {
-    if (handle->fd > -1) {
-	if (handle->is_legacy)
-	    pwrite(handle->fd, &data, 2, port + handle->base);
-	else
-	    pwrite(handle->fd, &data, 2, port);
-    } else {
-	outw(data, port + handle->base);
-    }
+    pwrite(handle->fd, &data, 2, port + handle->base);
 }
 
 static void
 pci_device_linux_sysfs_write8(struct pci_io_handle *handle, uint32_t port,
 			      uint8_t data)
 {
-    if (handle->fd > -1) {
-	if (handle->is_legacy)
-	    pwrite(handle->fd, &data, 1, port + handle->base);
-	else
-	    pwrite(handle->fd, &data, 1, port);
-    } else {
-	outb(data, port + handle->base);
-    }
+    pwrite(handle->fd, &data, 1, port + handle->base);
 }
 
 static int
@@ -927,7 +862,7 @@ pci_device_linux_sysfs_map_legacy(struct pci_device *dev, pciaddr_t base,
 	snprintf(name, PATH_MAX, "/sys/class/pci_bus/%04x:%02x/legacy_mem",
 		 dev->domain, dev->bus);
 
-	fd = open(name, flags | O_CLOEXEC);
+	fd = open(name, flags);
 	if (fd >= 0)
 	    break;
 
@@ -936,7 +871,7 @@ pci_device_linux_sysfs_map_legacy(struct pci_device *dev, pciaddr_t base,
 
     /* If not, /dev/mem is the best we can do */
     if (!dev)
-	fd = open("/dev/mem", flags | O_CLOEXEC);
+	fd = open("/dev/mem", flags);
 
     if (fd < 0)
 	return errno;
